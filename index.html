@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <title>포트폴리오 최적화 도구</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="container">
+    <h1>포트폴리오 최적화 도구</h1>
+    <form id="optimize-form">
+      <label for="PER">PER:</label>
+      <select id="PER" name="PER">
+        <option value="">선택</option>
+        <option value="high">High</option>
+        <option value="medium">Medium</option>
+        <option value="low">Low</option>
+      </select>
+
+      <label for="DividendYield">Dividend Yield:</label>
+      <select id="DividendYield" name="DividendYield">
+        <option value="">선택</option>
+        <option value="high">High</option>
+        <option value="medium">Medium</option>
+        <option value="low">Low</option>
+      </select>
+
+      <label for="Beta">Beta:</label>
+      <select id="Beta" name="Beta">
+        <option value="">선택</option>
+        <option value="high">High</option>
+        <option value="medium">Medium</option>
+        <option value="low">Low</option>
+      </select>
+
+      <label for="RSI">RSI:</label>
+      <select id="RSI" name="RSI">
+        <option value="">선택</option>
+        <option value="high">High</option>
+        <option value="medium">Medium</option>
+        <option value="low">Low</option>
+      </select>
+
+      <label for="volume">Volume:</label>
+      <select id="volume" name="volume">
+        <option value="">선택</option>
+        <option value="high">High</option>
+        <option value="medium">Medium</option>
+        <option value="low">Low</option>
+      </select>
+
+      <label for="Volatility">Volatility:</label>
+      <select id="Volatility" name="Volatility">
+        <option value="">선택</option>
+        <option value="high">High</option>
+        <option value="medium">Medium</option>
+        <option value="low">Low</option>
+      </select>
+
+      <button type="button" id="optimize-button">최적화 실행</button>
+    </form>
+    <div id="result"></div>
+  </div>
+  <script src="scripts.js"></script>
+</body>
+</html>

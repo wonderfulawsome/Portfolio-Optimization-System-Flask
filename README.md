@@ -51,15 +51,13 @@
 
 3️⃣ **의존성 패키지 설치**  
 
-
-pip install -r requirements.txt
+- pip install -r requirements.txt
 
 ## 4️⃣ 서버 실행
 
 터미널에서 아래 명령어를 실행합니다:
 
-
-python app.py
+- python app.py
 
 실행 후, [http://localhost:5000](http://localhost:5000) 에서 API를 사용할 수 있습니다.
 
@@ -75,8 +73,7 @@ python app.py
 ### 2️⃣ Docker Compose 실행
 터미널에서 아래 명령어를 실행합니다:
 
-
-docker-compose up --build
+- docker-compose up --build
 
 
 실행 후, [http://localhost:5000](http://localhost:5000) 에서 API를 사용할 수 있습니다.

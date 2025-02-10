@@ -45,20 +45,20 @@
    - Python 3.8 이상이 필요하며, [공식 웹사이트](https://www.python.org/)에서 다운로드 후 설치한다.
 
 2️⃣ **가상 환경 생성 (선택 사항)**  
-   ```bash
+
    python -m venv venv
    source venv/bin/activate  # (Windows: venv\Scripts\activate)
 
 3️⃣ **의존성 패키지 설치**  
 
-```bash
+
 pip install -r requirements.txt
 
 ## 4️⃣ 서버 실행
 
 터미널에서 아래 명령어를 실행합니다:
 
-```bash
+
 python app.py
 
 실행 후, [http://localhost:5000](http://localhost:5000) 에서 API를 사용할 수 있습니다.
@@ -75,7 +75,7 @@ python app.py
 ### 2️⃣ Docker Compose 실행
 터미널에서 아래 명령어를 실행합니다:
 
-```bash
+
 docker-compose up --build
 
 

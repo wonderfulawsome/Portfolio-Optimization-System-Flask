@@ -30,7 +30,7 @@ features = ['PER', 'DividendYield', 'Beta', 'RSI', 'volume', 'Volatility']
 cleaned_df_filtered = cleaned_df[features].dropna()
 
 # KMeans 클러스터링
-kmeans = KMeans(n_clusters=15, random_state=42, n_init=10)
+kmeans = KMeans(n_clusters=10, random_state=42, n_init=10)
 labels = kmeans.fit_predict(cleaned_df_filtered)
 cleaned_df.loc[cleaned_df_filtered.index, 'Cluster'] = labels
 cleaned_df['Cluster'] = cleaned_df['Cluster'].astype('Int64')

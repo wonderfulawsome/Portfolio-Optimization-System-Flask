@@ -1,9 +1,9 @@
-import os
+import requests
+import pandas as pd
+import numpy as np
 from flask import Flask, request, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
-import pandas as pd
-import numpy as np
 from sklearn.cluster import KMeans
 from scipy.optimize import minimize
 
@@ -22,54 +22,90 @@ class Data(db.Model):
 with app.app_context():
     db.create_all()
 
-# CSV 파일 로드
-cleaned_df = pd.read_csv("cleaned_data.csv")
-stock_data = pd.read_csv("stock_data.csv")
+def fetch_company_data(symbol):
+    profile_url = f'https://financialmodelingprep.com/api/v3/profile/{symbol}?apikey={API_KEY}'
+    ratios_url = f'https://financialmodelingprep.com/api/v3/ratios/{symbol}?limit=1&apikey={API_KEY}'
+    historical_url = f'https://financialmodelingprep.com/api/v3/historical-price-full/{symbol}?serietype=line&apikey={API_KEY}'
+
+    profile_resp = requests.get(profile_url)
+    ratios_resp = requests.get(ratios_url)
+    historical_resp = requests.get(historical_url)
+
+    if profile_resp.status_code == 200 and ratios_resp.status_code == 200 and historical_resp.status_code == 200:
+        profile_data = profile_resp.json()
+        ratios_data = ratios_resp.json()
+        historical_data = historical_resp.json()
+
+        if profile_data and ratios_data and 'historical' in historical_data:
+            profile = profile_data[0]
+            ratios = ratios_data[0]
+            historical = historical_data['historical']
+
+            # 필요한 데이터 추출
+            per = profile.get('pe', None)
+            dividend_yield = profile.get('lastDiv', None)
+            beta = profile.get('beta', None)
+            volume = profile.get('volAvg', None)
+            volatility = profile.get('volatility', None)
+            rsi = None  # RSI는 별도의 계산이 필요합니다
+
+            # 수익률 계산
+            df = pd.DataFrame(historical)
+            df['date'] = pd.to_datetime(df['date'])
+            df.sort_values('date', inplace=True)
+            df['return'] = df['close'].pct_change()
+            returns = df['return'].dropna()
+
+            return {
+                'Ticker': symbol,
+                'PER': per,
+                'DividendYield': dividend_yield,
+                'Beta': beta,
+                'RSI': rsi,
+                'volume': volume,
+                'Volatility': volatility,
+                'returns': returns
+            }
+    return None
+
+# 예시 티커 리스트
+tickers = ['AAPL', 'MSFT', 'GOOGL']  # 실제 사용하고자 하는 티커로 대체하세요
+
+company_data_list = []
+returns_data = {}
+
+for ticker in tickers:
+    data = fetch_company_data(ticker)
+    if data:
+        company_data_list.append({
+            'Ticker': data['Ticker'],
+            'PER': data['PER'],
+            'DividendYield': data['DividendYield'],
+            'Beta': data['Beta'],
+            'RSI': data['RSI'],
+            'volume': data['volume'],
+            'Volatility': data['Volatility']
+        })
+        returns_data[ticker] = data['returns']
+
+# 데이터프레임 생성
+cleaned_df = pd.DataFrame(company_data_list).dropna()
 
 features = ['PER', 'DividendYield', 'Beta', 'RSI', 'volume', 'Volatility']
 cleaned_df_filtered = cleaned_df[features].dropna()
 
-# KMeans 클러스터링
 kmeans = KMeans(n_clusters=10, random_state=42, n_init=10)
 labels = kmeans.fit_predict(cleaned_df_filtered)
 cleaned_df.loc[cleaned_df_filtered.index, 'Cluster'] = labels
 cleaned_df['Cluster'] = cleaned_df['Cluster'].astype('Int64')
 
-# 클러스터 중심 계산
 centroids = pd.DataFrame(kmeans.cluster_centers_, columns=features)
-
-def map_input(cluster_feature, feature_value):
-    if feature_value == 'high':
-        return cluster_feature.max()
-    elif feature_value == 'medium':
-        return cluster_feature.mean()
-    elif feature_value == 'low':
-        return cluster_feature.min()
-    else:
-        return cluster_feature.mean()
-
-def evaluate_cluster_fit(user_values, centroids):
-    distances = []
-    for idx, row in centroids.iterrows():
-        distance = sum((user_values[feature] - row[feature])**2 for feature in user_values.keys())
-        distances.append(distance)
-    return distances.index(min(distances))
-
-def negative_sharpe_ratio(weights, mean_returns, cov_matrix, risk_free_rate=0.01):
-    portfolio_return = np.dot(weights, mean_returns)
-    portfolio_volatility = np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights)))
-    sharpe_ratio = (portfolio_return - risk_free_rate) / portfolio_volatility
-    return -sharpe_ratio
 
 def get_ret_vol_sr(weights, mean_returns, cov_matrix):
     portfolio_return = np.dot(weights, mean_returns)
     portfolio_volatility = np.sqrt(np.dot(weights.T, np.dot(cov_matrix, weights)))
     sharpe_ratio = (portfolio_return - 0.01) / portfolio_volatility
     return np.array([portfolio_return, portfolio_volatility, sharpe_ratio])
-
-@app.route('/')
-def index():
-    return app.send_static_file('index.html')
 
 @app.route('/optimize', methods=['POST'])
 def optimize():
@@ -86,16 +122,13 @@ def optimize():
     closest_cluster = evaluate_cluster_fit(mapped_values, centroids)
     tickers_in_cluster = cleaned_df[cleaned_df['Cluster'] == closest_cluster]['Ticker'].tolist()
 
-    stock_data_clean = stock_data.dropna(axis=1)
-    ticker_columns = [col for col in stock_data_clean.columns if col != 'Date']
-    cluster_tickers = list(set(tickers_in_cluster) & set(ticker_columns))
-    if not cluster_tickers:
+    cluster_returns = {ticker: returns_data[ticker] for ticker in tickers_in_cluster if ticker in returns_data}
+    if not cluster_returns:
         return jsonify({"error": "No matching tickers found in stock data for the chosen cluster."}), 400
 
-    stock_data_cluster = stock_data_clean[['Date'] + cluster_tickers]
-    returns = stock_data_cluster.drop(columns=['Date']).pct_change().dropna()
-    mean_returns = returns.mean() * 252
-    cov_matrix = returns.cov() * 252
+    returns_df = pd.DataFrame(cluster_returns).dropna()
+    mean_returns = returns_df.mean() * 252
+    cov_matrix = returns_df.cov() * 252
 
     num_portfolios = 10000
     all_weights = np.zeros((num_portfolios, len(mean_returns)))
@@ -114,7 +147,7 @@ def optimize():
 
     max_sharpe_idx = sharpe_arr.argmax()
     optimal_weights = all_weights[max_sharpe_idx]
-    optimal_portfolio = {ticker: round(weight * 100, 2) for ticker, weight in zip(cluster_tickers, optimal_weights)}
+    optimal_portfolio = {ticker: round(weight * 100, 2) for ticker, weight in zip(mean_returns.index, optimal_weights)}
 
     result = {
         "closest_cluster": closest_cluster,
@@ -124,7 +157,3 @@ def optimize():
         "expected_volatility": vol_arr[max_sharpe_idx]
     }
     return jsonify(result), 200
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=True)

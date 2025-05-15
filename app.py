@@ -51,7 +51,7 @@ TICKERS = [
     "XYL", "YUM", "ZBRA", "ZBH", "ZION", "ZTS"
 ]
 
-import os, sys, requests, logging
+import os, sys, logging, requests
 import pandas as pd, numpy as np
 from math import sqrt
 from flask import Flask, request, jsonify
@@ -59,108 +59,93 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
 from sklearn.cluster import AgglomerativeClustering
 
-# ---------- 기본 설정 ----------
-API_KEY = os.getenv("FMP_API_KEY")
+API_KEY = os.getenv('API_KEY')
 if not API_KEY:
-    raise RuntimeError("환경변수 FMP_API_KEY 가 설정되지 않았습니다.")
+    raise RuntimeError('API_KEY not set')
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
 RISK_FREE = 0.01
 FEATURES = ['PER', 'DividendYield', 'Beta', 'RSI', 'volume', 'Volatility']
 
-# ---------- Flask ----------
+# 로그
+logging.basicConfig(level=logging.INFO, format='%(levelname)s | %(message)s')
+
 app = Flask(__name__, static_folder='static', static_url_path='')
 CORS(app)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///data.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
+
 class Data(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     content = db.Column(db.String(200), nullable=False)
+
 with app.app_context():
     db.create_all()
 
-# ---------- 유틸 ----------
-def calc_rsi(close, period=14):
+def calc_rsi(close, p=14):
     delta = close.diff()
-    gain = delta.clip(lower=0).rolling(period).mean()
-    loss = (-delta.clip(upper=0)).rolling(period).mean()
+    gain = delta.clip(lower=0).rolling(p).mean()
+    loss = (-delta.clip(upper=0)).rolling(p).mean()
     rs = gain / loss
     return float(100 - 100 / (1 + rs.iloc[-1]))
 
-def fetch_company_data(symbol: str):
+def fetch(symbol):
     prof  = f'https://financialmodelingprep.com/api/v3/profile/{symbol}?apikey={API_KEY}'
     ratio = f'https://financialmodelingprep.com/api/v3/ratios-ttm/{symbol}?apikey={API_KEY}'
     hist  = f'https://financialmodelingprep.com/api/v3/historical-price-full/{symbol}?serietype=line&apikey={API_KEY}'
     try:
-        p_json = requests.get(prof, timeout=10).json()[0]
-        r_json = requests.get(ratio, timeout=10).json()[0]
-        hist_j = requests.get(hist,  timeout=10).json()['historical']
+        p = requests.get(prof, timeout=10).json()[0]
+        r = requests.get(ratio, timeout=10).json()[0]
+        h = requests.get(hist, timeout=10).json()['historical']
     except Exception as e:
-        logging.warning(f"{symbol}: API 호출 실패 → {e}")
+        logging.warning(f'{symbol}: API fail {e}')
         return None
-
-    # 필수값 검사
-    if p_json.get('pe') is None or p_json.get('beta') is None:
-        logging.warning(f"{symbol}: 필수 재무지표 누락 → skip")
+    if p.get('pe') is None or p.get('beta') is None:
         return None
-
-    hist_df = pd.DataFrame(hist_j).sort_values('date')
-    closes  = hist_df['close']
-    if len(closes) < 30:
-        logging.warning(f"{symbol}: 가격 이력 부족 → skip")
+    df = pd.DataFrame(h).sort_values('date')
+    if len(df) < 30:
         return None
-
+    closes = df['close']
     returns = closes.pct_change().dropna()
     return {
-        'Ticker':         symbol,
-        'PER':            p_json['pe'],
-        'DividendYield':  r_json.get('dividendYieldPercentageTTM'),  # %
-        'Beta':           p_json['beta'],
-        'RSI':            calc_rsi(closes),
-        'volume':         p_json.get('volAvg'),
-        'Volatility':     returns.std() * sqrt(252),
-        'returns':        returns
+        'Ticker': symbol,
+        'PER': p['pe'],
+        'DividendYield': r.get('dividendYieldPercentageTTM'),
+        'Beta': p['beta'],
+        'RSI': calc_rsi(closes),
+        'volume': p.get('volAvg'),
+        'Volatility': returns.std() * sqrt(252),
+        'returns': returns
     }
 
-# ---------- 데이터 수집 ----------
-rows, returns_map = [], {}
-for tkr in TICKERS:
-    d = fetch_company_data(tkr)
-    if d:
+rows, ret_map = [], {}
+for t in TICKERS:
+    d = fetch(t)
+    if d: 
         rows.append({k: d[k] for k in ['Ticker'] + FEATURES})
-        returns_map[tkr] = d['returns']
-
-logging.info(f"성공 {len(rows)} 종목 / 실패 {len(TICKERS)-len(rows)} 종목")
-
+        ret_map[t] = d['returns']
+logging.info(f'Collected {len(rows)} / {len(TICKERS)} tickers')
 if not rows:
-    logging.error("가져온 종목이 없습니다. API 키·티커 확인 후 다시 배포하세요.")
-    sys.exit(1)
+    sys.exit('No data collected')
 
 cleaned_df = pd.DataFrame(rows)
-cleaned_df_filtered = cleaned_df[FEATURES]
-
-# ---------- 클러스터링 ----------
-agg = AgglomerativeClustering(n_clusters=3, affinity='euclidean', linkage='ward')
-cleaned_df['Cluster'] = agg.fit_predict(cleaned_df_filtered).astype('int')
+agg = AgglomerativeClustering(n_clusters=3, linkage='ward')
+cleaned_df['Cluster'] = agg.fit_predict(cleaned_df[FEATURES]).astype(int)
 centroids = cleaned_df.groupby('Cluster')[FEATURES].mean().reset_index(drop=True)
 
-def map_input(cluster_feature, tag):
-    return {'high': cluster_feature.max(),
-            'medium': cluster_feature.mean(),
-            'low': cluster_feature.min()}.get(tag, cluster_feature.mean())
+def map_input(col, tag):
+    return {'high': col.max(), 'medium': col.mean(), 'low': col.min()}.get(tag, col.mean())
 
-def best_cluster(user_vals):
-    dists = ((centroids - pd.Series(user_vals)).pow(2).sum(axis=1))
-    return int(dists.idxmin())
+def best_cluster(user):
+    d = ((centroids - pd.Series(user)).pow(2).sum(axis=1))
+    return int(d.idxmin())
 
-def port_stats(w, mean_ret, cov):
-    r = np.dot(w, mean_ret)
-    v = sqrt(np.dot(w.T, np.dot(cov, w)))
+def port_stats(w, mean, cov):
+    r = np.dot(w, mean)
+    v = sqrt(np.dot(w.T, cov @ w))
     s = (r - RISK_FREE) / v
     return r, v, s
 
-# ---------- Flask 엔드포인트 ----------
 @app.route('/')
 def index():
     return app.send_static_file('index.html')
@@ -169,24 +154,22 @@ def index():
 def optimize():
     req = request.json
     if any(f not in req for f in FEATURES):
-        return jsonify({'error': 'Missing required features'}), 400
-    if any(req[f].lower() not in ['high', 'medium', 'low'] for f in FEATURES):
-        return jsonify({'error': 'Values must be high / medium / low'}), 400
+        return jsonify({'error': 'missing feature'}), 400
+    if any(req[f].lower() not in ['high','medium','low'] for f in FEATURES):
+        return jsonify({'error': 'value must be high/medium/low'}), 400
 
-    user_vals = {f: map_input(centroids[f], req[f].lower()) for f in FEATURES}
-    cl        = best_cluster(user_vals)
-    tickers   = cleaned_df[cleaned_df['Cluster'] == cl]['Ticker'].tolist()
+    mapped = {f: map_input(centroids[f], req[f].lower()) for f in FEATURES}
+    cl = best_cluster(mapped)
+    tickers = cleaned_df[cleaned_df.Cluster == cl].Ticker.tolist()
 
-    rets = {t: returns_map[t] for t in tickers if t in returns_map}
+    rets = {t: ret_map[t] for t in tickers if t in ret_map}
     if not rets:
-        return jsonify({'error': 'No return data for cluster'}), 400
-
-    df   = pd.DataFrame(rets).dropna()
-    mean = df.mean()*252
-    cov  = df.cov()*252
+        return jsonify({'error': 'no returns'}), 400
+    df = pd.DataFrame(rets).dropna()
+    mean, cov = df.mean()*252, df.cov()*252
 
     sims = 10000
-    wts  = np.random.dirichlet(np.ones(len(mean)), sims)
+    wts = np.random.dirichlet(np.ones(len(mean)), sims)
     stats = np.array([port_stats(w, mean, cov) for w in wts])
     best = stats[:,2].argmax()
 
@@ -198,7 +181,7 @@ def optimize():
         'expected_volatility': float(stats[best,1])
     }), 200
 
-# ---------- 실행 ----------
 if __name__ == '__main__':
     port = int(os.getenv('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
+

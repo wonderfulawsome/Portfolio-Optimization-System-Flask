@@ -67,7 +67,6 @@ if not API_KEY:
 logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
 RISK_FREE = 0.01
 FEATURES = ['PER', 'DividendYield', 'Beta', 'RSI', 'volume', 'Volatility']
-TICKERS  = ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'TSLA']   # 필요 시 수정
 
 # ---------- Flask ----------
 app = Flask(__name__, static_folder='static', static_url_path='')

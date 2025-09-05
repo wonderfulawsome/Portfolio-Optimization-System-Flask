@@ -5,22 +5,11 @@ import pandas as pd
 import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from flask_sqlalchemy import SQLAlchemy
 from sklearn.cluster import SpectralClustering
 from sklearn.preprocessing import StandardScaler
 
-app = Flask(__name__, static_folder="static", static_url_path="")
+app = Flask(__name__)
 CORS(app)
-app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///data.db"
-app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-db = SQLAlchemy(app)
-
-class Data(db.Model):
-    id = db.Column(db.Integer, primary_key=True)
-    content = db.Column(db.String(200), nullable=False)
-
-with app.app_context():
-    db.create_all()
 
 API_KEY = os.environ.get('API_KEY')
 TICKERS = "AAPL,MSFT,GOOGL,AMZN,TSLA,META,NVDA,NFLX,JPM,JNJ"
@@ -38,7 +27,7 @@ def fetch_stock_data():
     scaler = StandardScaler()
     scaled_features = scaler.fit_transform(np.column_stack([price_diffs, price_ranges, volume_ratios]))
     
-    df = pd.DataFrame([{
+    return pd.DataFrame([{
         'symbol': stock['symbol'],
         'pe': stock['pe'],
         'eps': stock['eps'],
@@ -47,8 +36,6 @@ def fetch_stock_data():
         'norm_price_ranges': scaled_features[i, 1],
         'norm_volume_ratios': scaled_features[i, 2]
     } for i, stock in enumerate(data)])
-    
-    return df
 
 def fetch_historical_data():
     historical_data = {}
@@ -64,13 +51,13 @@ def fetch_historical_data():
     price_df = pd.DataFrame(historical_data)
     return price_df.pct_change().dropna()
 
-cleaned_df = fetch_stock_data()
-cleaned_df_filtered = cleaned_df[features].dropna()
+stock_df = fetch_stock_data()
+stock_filtered = stock_df[features].dropna()
 
 spectral = SpectralClustering(n_clusters=3, affinity='rbf')
-labels = spectral.fit_predict(cleaned_df_filtered)
-cleaned_df.loc[cleaned_df_filtered.index, "Cluster"] = labels.astype(int)
-centroids = cleaned_df.groupby("Cluster")[features].mean().reset_index(drop=True)
+labels = spectral.fit_predict(stock_filtered)
+stock_df.loc[stock_filtered.index, "Cluster"] = labels.astype(int)
+centroids = stock_df.groupby("Cluster")[features].mean().reset_index(drop=True)
 
 def map_input(cluster_feature, tag):
     tags = {"high": cluster_feature.max(), "medium": cluster_feature.mean(), "low": cluster_feature.min()}
@@ -88,7 +75,7 @@ def stats(weights, mean_ret, cov):
 
 @app.route("/")
 def index():
-    return jsonify({"status": "API running", "features": features})
+    return jsonify({"status": "running", "features": features})
 
 @app.route("/optimize", methods=["POST"])
 def optimize():
@@ -96,14 +83,14 @@ def optimize():
     if any(f not in data for f in features):
         return jsonify({"error": "Missing features"}), 400
     if any(data[f].lower() not in ["high", "medium", "low"] for f in features):
-        return jsonify({"error": "Values must be high / medium / low"}), 400
+        return jsonify({"error": "Invalid values"}), 400
     
     mapped = {f: map_input(centroids[f], data[f].lower()) for f in features}
     cluster = best_cluster(mapped)
-    tickers = cleaned_df[cleaned_df["Cluster"] == cluster]["symbol"].dropna().tolist()
+    tickers = stock_df[stock_df["Cluster"] == cluster]["symbol"].dropna().tolist()
     
     if not tickers:
-        return jsonify({"error": "No matching tickers"}), 400
+        return jsonify({"error": "No tickers found"}), 400
     
     returns = fetch_historical_data()
     cluster_returns = returns[[col for col in returns.columns if col in tickers]]
@@ -114,8 +101,7 @@ def optimize():
     mean_ret = cluster_returns.mean() * 252
     cov = cluster_returns.cov() * 252
     
-    sims = 10000
-    weights = np.random.dirichlet(np.ones(len(mean_ret)), sims)
+    weights = np.random.dirichlet(np.ones(len(mean_ret)), 10000)
     res = np.array([stats(w, mean_ret, cov) for w in weights])
     best = res[:, 2].argmax()
     

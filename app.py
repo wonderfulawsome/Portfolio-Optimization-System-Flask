@@ -44,8 +44,8 @@ def fetch_historical_data():
         response = requests.get(url)
         data = response.json()
         
-        if 'historical' in data:
-            prices = [day['close'] for day in data['historical'][::-1]]
+        if isinstance(data, list) and data:
+            prices = [day['close'] for day in data]
             historical_data[ticker] = prices
     
     price_df = pd.DataFrame(historical_data)

@@ -69,13 +69,19 @@ def index():
 
 @app.route("/optimize", methods=["POST"])
 def optimize():
-    data = request.json
-    if any(f not in data for f in features):
-        return jsonify({"error": "Missing features"}), 400
-    if any(data[f].lower() not in ["high", "medium", "low"] for f in features):
+    req_data = request.json
+    print("Received data:", req_data)
+    print("Expected features:", features)
+    
+    if any(f not in req_data for f in features):
+        missing = [f for f in features if f not in req_data]
+        print("Missing features:", missing)
+        return jsonify({"error": f"Missing features: {missing}"}), 400
+    
+    if any(req_data[f].lower() not in ["high", "medium", "low"] for f in features):
         return jsonify({"error": "Values must be high / medium / low"}), 400
     
-    mapped = {f: map_input(centroids[f], data[f].lower()) for f in features}
+    mapped = {f: map_input(centroids[f], req_data[f].lower()) for f in features}
     cluster = best_cluster(mapped)
     cluster_tickers = cleaned_df[cleaned_df["Cluster"] == cluster]["Ticker"].dropna().tolist()
     

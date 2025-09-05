@@ -96,7 +96,7 @@ def stats(weights, mean_ret, cov):
 
 @app.route("/")
 def index():
-    return app.send_static_file("index.html")
+    return jsonify({"status": "running"})
 
 @app.route("/optimize", methods=["POST"])
 def optimize():
@@ -138,3 +138,4 @@ def optimize():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=True)
+

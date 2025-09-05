@@ -55,14 +55,14 @@ def load_historical_data():
     all_data = {}
     dates = []
     
-    for ticker_data in data:
-        symbol = ticker_data['symbol']
-        historical = ticker_data['historical']
-        
-        if not dates:
-            dates = [day['date'] for day in historical]
-        
-        all_data[symbol] = [day['close'] for day in historical]
+    for item in data:
+        if isinstance(item, dict) and 'symbol' in item and 'historical' in item:
+            symbol = item['symbol']
+            historical = item['historical']
+            
+            if not dates:
+                dates = [day['date'] for day in historical]
+            all_data[symbol] = [day['close'] for day in historical]
     
     df = pd.DataFrame(all_data)
     df.insert(0, 'Date', dates)
@@ -127,18 +127,13 @@ def optimize():
     res = np.array([stats(w, mean_ret, cov) for w in weights])
     best = res[:, 2].argmax()
     
-    return (
-        jsonify(
-            {
-                "closest_cluster": cluster,
-                "optimized_companies": cluster_tickers,
-                "optimal_portfolio": {t: round(w * 100, 2) for t, w in zip(mean_ret.index, weights[best])},
-                "expected_return": float(res[best, 0]),
-                "expected_volatility": float(res[best, 1]),
-            }
-        ),
-        200,
-    )
+    return jsonify({
+        "closest_cluster": cluster,
+        "optimized_companies": cluster_tickers,
+        "optimal_portfolio": {t: round(w * 100, 2) for t, w in zip(mean_ret.index, weights[best])},
+        "expected_return": float(res[best, 0]),
+        "expected_volatility": float(res[best, 1]),
+    })
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))

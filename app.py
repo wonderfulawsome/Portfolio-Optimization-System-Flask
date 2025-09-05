@@ -1,41 +1,76 @@
 import os
+from math import sqrt
+import numpy as np
+import pandas as pd
+import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import pandas as pd
-import numpy as np
+from flask_sqlalchemy import SQLAlchemy
+from sklearn.cluster import SpectralClustering
+from sklearn.preprocessing import StandardScaler
 
-app = Flask(__name__)
+app = Flask(__name__, static_folder="static", static_url_path="")
 CORS(app)
+app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///data.db"
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+db = SQLAlchemy(app)
 
-# 로그 출력 강제
-import sys
-import logging
-logging.basicConfig(stream=sys.stdout, level=logging.INFO)
+class Data(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    content = db.Column(db.String(200), nullable=False)
 
-print("=== APPLICATION STARTING ===")
-print(f"API_KEY exists: {'API_KEY' in os.environ}")
-print(f"Environment variables: {list(os.environ.keys())}")
+with app.app_context():
+    db.create_all()
 
-# 더미 데이터로 시작
+API_KEY = os.environ.get('API_KEY')
+TICKERS = "AAPL,MSFT,GOOGL,AMZN,TSLA,META,NVDA,NFLX,JPM,JNJ"
 features = ["pe", "eps", "marketCap", "norm_price_diffs", "norm_price_ranges", "norm_volume_ratios"]
 
-# 간단한 더미 데이터
-stock_data = pd.DataFrame({
-    'symbol': ['AAPL', 'MSFT', 'GOOGL'],
-    'pe': [25.0, 30.0, 28.0],
-    'eps': [6.0, 8.0, 5.0], 
-    'marketCap': [3000000000000, 2500000000000, 1800000000000],
-    'norm_price_diffs': [0.5, -0.2, 0.1],
-    'norm_price_ranges': [1.2, 0.8, 1.0], 
-    'norm_volume_ratios': [-0.3, 0.4, 0.0],
-    'Cluster': [0, 1, 2]
-})
+def fetch_stock_data():
+    url = f"https://financialmodelingprep.com/api/v3/quote/{TICKERS}?apikey={API_KEY}"
+    response = requests.get(url)
+    data = response.json()
+    
+    price_diffs = [(stock['price'] - stock['priceAvg200']) for stock in data]
+    price_ranges = [(stock['yearHigh'] - stock['yearLow']) for stock in data]
+    volume_ratios = [(stock['volume'] / stock['avgVolume']) for stock in data]
+    
+    scaler = StandardScaler()
+    scaled_features = scaler.fit_transform(np.column_stack([price_diffs, price_ranges, volume_ratios]))
+    
+    df = pd.DataFrame([{
+        'symbol': stock['symbol'],
+        'pe': stock['pe'],
+        'eps': stock['eps'],
+        'marketCap': stock['marketCap'],
+        'norm_price_diffs': scaled_features[i, 0],
+        'norm_price_ranges': scaled_features[i, 1],
+        'norm_volume_ratios': scaled_features[i, 2]
+    } for i, stock in enumerate(data)])
+    
+    return df
 
-centroids = stock_data.groupby("Cluster")[features].mean().reset_index(drop=True)
+def fetch_historical_data():
+    historical_data = {}
+    for ticker in TICKERS.split(','):
+        url = f"https://financialmodelingprep.com/api/v3/historical-price-full/{ticker}?timeseries=252&apikey={API_KEY}"
+        response = requests.get(url)
+        data = response.json()
+        
+        if 'historical' in data:
+            prices = [day['close'] for day in data['historical'][::-1]]
+            historical_data[ticker] = prices
+    
+    price_df = pd.DataFrame(historical_data)
+    return price_df.pct_change().dropna()
 
-print("=== DATA INITIALIZED ===")
-print(f"Stock data shape: {stock_data.shape}")
-print(f"Centroids shape: {centroids.shape}")
+cleaned_df = fetch_stock_data()
+cleaned_df_filtered = cleaned_df[features].dropna()
+
+spectral = SpectralClustering(n_clusters=3, affinity='rbf')
+labels = spectral.fit_predict(cleaned_df_filtered)
+cleaned_df.loc[cleaned_df_filtered.index, "Cluster"] = labels.astype(int)
+centroids = cleaned_df.groupby("Cluster")[features].mean().reset_index(drop=True)
 
 def map_input(cluster_feature, tag):
     tags = {"high": cluster_feature.max(), "medium": cluster_feature.mean(), "low": cluster_feature.min()}
@@ -45,72 +80,53 @@ def best_cluster(user_vals):
     dist = ((centroids - pd.Series(user_vals)).pow(2).sum(axis=1))
     return int(dist.idxmin())
 
+def stats(weights, mean_ret, cov):
+    ret = np.dot(weights, mean_ret)
+    vol = sqrt(np.dot(weights.T, np.dot(cov, weights)))
+    sr = (ret - 0.01) / vol
+    return ret, vol, sr
+
 @app.route("/")
 def index():
-    return jsonify({"status": "Portfolio Optimization API is running!", "features": features})
-
-@app.route("/test")
-def test():
-    return jsonify({
-        "message": "Test endpoint working",
-        "api_key_exists": bool(os.environ.get('API_KEY')),
-        "features": features,
-        "stock_count": len(stock_data)
-    })
+    return jsonify({"status": "API running", "features": features})
 
 @app.route("/optimize", methods=["POST"])
 def optimize():
-    try:
-        print("=== OPTIMIZE REQUEST RECEIVED ===")
-        
-        data = request.json
-        print(f"Request data: {data}")
-        
-        if not data:
-            print("ERROR: No JSON data")
-            return jsonify({"error": "No JSON data provided"}), 400
-            
-        # 요청 데이터 검증
-        missing = [f for f in features if f not in data]
-        if missing:
-            print(f"ERROR: Missing features: {missing}")
-            return jsonify({"error": f"Missing features: {missing}"}), 400
-            
-        invalid = [f for f in features if data[f].lower() not in ["high", "medium", "low"]]
-        if invalid:
-            print(f"ERROR: Invalid values: {invalid}")
-            return jsonify({"error": f"Invalid values for: {invalid}"}), 400
-
-        # 클러스터 선택
-        mapped = {f: map_input(centroids[f], data[f].lower()) for f in features}
-        cluster = best_cluster(mapped)
-        cluster_symbols = stock_data[stock_data["Cluster"] == cluster]["symbol"].tolist()
-        
-        print(f"Selected cluster: {cluster}")
-        print(f"Cluster symbols: {cluster_symbols}")
-
-        # 더미 포트폴리오 생성
-        portfolio = {symbol: round(100/len(cluster_symbols), 2) for symbol in cluster_symbols}
-        
-        result = {
-            "closest_cluster": cluster,
-            "optimized_companies": cluster_symbols,
-            "optimal_portfolio": portfolio,
-            "expected_return": 0.12,
-            "expected_volatility": 0.18,
-            "message": "Using dummy data for testing"
-        }
-        
-        print(f"SUCCESS: {result}")
-        return jsonify(result), 200
-        
-    except Exception as e:
-        print(f"ERROR in optimize: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        return jsonify({"error": f"Server error: {str(e)}"}), 500
+    data = request.json
+    if any(f not in data for f in features):
+        return jsonify({"error": "Missing features"}), 400
+    if any(data[f].lower() not in ["high", "medium", "low"] for f in features):
+        return jsonify({"error": "Values must be high / medium / low"}), 400
+    
+    mapped = {f: map_input(centroids[f], data[f].lower()) for f in features}
+    cluster = best_cluster(mapped)
+    tickers = cleaned_df[cleaned_df["Cluster"] == cluster]["symbol"].dropna().tolist()
+    
+    if not tickers:
+        return jsonify({"error": "No matching tickers"}), 400
+    
+    returns = fetch_historical_data()
+    cluster_returns = returns[[col for col in returns.columns if col in tickers]]
+    
+    if cluster_returns.empty:
+        return jsonify({"error": "No historical data"}), 400
+    
+    mean_ret = cluster_returns.mean() * 252
+    cov = cluster_returns.cov() * 252
+    
+    sims = 10000
+    weights = np.random.dirichlet(np.ones(len(mean_ret)), sims)
+    res = np.array([stats(w, mean_ret, cov) for w in weights])
+    best = res[:, 2].argmax()
+    
+    return jsonify({
+        "closest_cluster": cluster,
+        "optimized_companies": tickers,
+        "optimal_portfolio": {t: round(w * 100, 2) for t, w in zip(mean_ret.index, weights[best])},
+        "expected_return": float(res[best, 0]),
+        "expected_volatility": float(res[best, 1]),
+    })
 
 if __name__ == "__main__":
-    print("=== STARTING FLASK SERVER ===")
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=True)

@@ -10,7 +10,7 @@ from sklearn.cluster import SpectralClustering
 from sklearn.preprocessing import StandardScaler
 
 app = Flask(__name__, static_folder="static", static_url_path="")
-CORS(app, origins=["https://portfolio-optimization-system-react-zdz8.vercel.app"])
+CORS(app, origins="*")
 app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///data.db"
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 db = SQLAlchemy(app)

@@ -2,6 +2,7 @@ import os
 from math import sqrt
 import numpy as np
 import pandas as pd
+import requests
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
@@ -21,50 +22,40 @@ class Data(db.Model):
 with app.app_context():
     db.create_all()
 
-# 하드코딩된 테스트 데이터
-test_data = [
-    {'symbol': 'AAPL', 'pe': 25.5, 'eps': 6.05, 'marketCap': 3000000000000, 'price': 150, 'priceAvg200': 145, 'yearHigh': 180, 'yearLow': 120, 'volume': 50000000, 'avgVolume': 45000000},
-    {'symbol': 'MSFT', 'pe': 30.2, 'eps': 8.12, 'marketCap': 2800000000000, 'price': 300, 'priceAvg200': 295, 'yearHigh': 350, 'yearLow': 250, 'volume': 30000000, 'avgVolume': 28000000},
-    {'symbol': 'GOOGL', 'pe': 22.8, 'eps': 4.56, 'marketCap': 1700000000000, 'price': 120, 'priceAvg200': 115, 'yearHigh': 140, 'yearLow': 90, 'volume': 25000000, 'avgVolume': 23000000},
-    {'symbol': 'AMZN', 'pe': 45.1, 'eps': 2.31, 'marketCap': 1500000000000, 'price': 140, 'priceAvg200': 135, 'yearHigh': 170, 'yearLow': 110, 'volume': 35000000, 'avgVolume': 32000000},
-    {'symbol': 'TSLA', 'pe': 65.3, 'eps': 3.22, 'marketCap': 800000000000, 'price': 250, 'priceAvg200': 240, 'yearHigh': 300, 'yearLow': 180, 'volume': 40000000, 'avgVolume': 38000000}
-]
+# API 데이터를 원래 변수명으로 매핑
+API_KEY = os.environ.get("API_KEY")
+tickers = "AAPL,MSFT,GOOGL,AMZN,TSLA,META,NVDA,NFLX,JPM,JNJ"
+response = requests.get(f"https://financialmodelingprep.com/api/v3/quote/{tickers}?apikey={API_KEY}")
+data = response.json()
 
-try:
-    data = test_data
-    print(f"Using test data, length: {len(data)}")
-    
-    price_diffs = [(stock['price'] - stock['priceAvg200']) for stock in data]
-    price_ranges = [(stock['yearHigh'] - stock['yearLow']) for stock in data]
-    volume_ratios = [(stock['volume'] / stock['avgVolume']) for stock in data]
+# 정규화
+price_diffs = [(stock['price'] - stock['priceAvg200']) for stock in data if stock.get('price') and stock.get('priceAvg200')]
+price_ranges = [(stock['yearHigh'] - stock['yearLow']) for stock in data if stock.get('yearHigh') and stock.get('yearLow')]
+volume_ratios = [(stock['volume'] / stock['avgVolume']) for stock in data if stock.get('volume') and stock.get('avgVolume')]
 
-    scaler = StandardScaler()
-    features_to_scale = np.column_stack([price_diffs, price_ranges, volume_ratios])
-    scaled_features = scaler.fit_transform(features_to_scale)
+scaler = StandardScaler()
+features_to_scale = np.column_stack([price_diffs, price_ranges, volume_ratios])
+scaled_features = scaler.fit_transform(features_to_scale)
 
-    cleaned_df = pd.DataFrame({
-        'Ticker': [stock['symbol'] for stock in data],
-        'pe': [stock['pe'] for stock in data],
-        'eps': [stock['eps'] for stock in data],
-        'marketCap': [stock['marketCap'] for stock in data],
-        'norm_price_diffs': scaled_features[:, 0],
-        'norm_price_ranges': scaled_features[:, 1],
-        'norm_volume_ratios': scaled_features[:, 2]
-    })
+# 원래 변수명으로 매핑
+cleaned_df = pd.DataFrame({
+    'Ticker': [stock['symbol'] for stock in data if stock.get('pe')],
+    'PER': [stock['pe'] for stock in data if stock.get('pe')],
+    'DividendYield': [stock['eps'] for stock in data if stock.get('eps')],  
+    'Beta': [stock['marketCap'] for stock in data if stock.get('marketCap')],
+    'RSI': scaled_features[:, 0],
+    'volume': scaled_features[:, 1], 
+    'Volatility': scaled_features[:, 2]
+})
 
-    features = ["pe", "eps", "marketCap", "norm_price_diffs", "norm_price_ranges", "norm_volume_ratios"]
-    cleaned_df_filtered = cleaned_df[features].dropna()
+stock_data = pd.read_csv("stock_data.csv")
+features = ["PER", "DividendYield", "Beta", "RSI", "volume", "Volatility"]
+cleaned_df_filtered = cleaned_df[features].dropna()
 
-    spectral = SpectralClustering(n_clusters=3, affinity='rbf', random_state=42)
-    labels = spectral.fit_predict(cleaned_df_filtered)
-    cleaned_df.loc[cleaned_df_filtered.index, "Cluster"] = labels.astype(int)
-    centroids = cleaned_df.groupby("Cluster")[features].mean().reset_index(drop=True)
-    print("Initialization successful")
-
-except Exception as e:
-    print(f"Error during initialization: {e}")
-    cleaned_df = pd.DataFrame()
-    centroids = pd.DataFrame()
+spectral = SpectralClustering(n_clusters=3, affinity='rbf')
+labels = spectral.fit_predict(cleaned_df_filtered)
+cleaned_df.loc[cleaned_df_filtered.index, "Cluster"] = labels.astype(int)
+centroids = cleaned_df.groupby("Cluster")[features].mean().reset_index(drop=True)
 
 def map_input(cluster_feature, tag):
     tags = {"high": cluster_feature.max(), "medium": cluster_feature.mean(), "low": cluster_feature.min()}
@@ -74,46 +65,52 @@ def best_cluster(user_vals):
     dist = ((centroids - pd.Series(user_vals)).pow(2).sum(axis=1))
     return int(dist.idxmin())
 
+def stats(weights, mean_ret, cov):
+    ret = np.dot(weights, mean_ret)
+    vol = sqrt(np.dot(weights.T, np.dot(cov, weights)))
+    sr = (ret - 0.01) / vol
+    return ret, vol, sr
+
 @app.route("/")
 def index():
     return app.send_static_file("index.html")
 
 @app.route("/optimize", methods=["POST"])
 def optimize():
-    try:
-        req_data = request.json
-        print("Received data:", req_data)
-        
-        features = ["pe", "eps", "marketCap", "norm_price_diffs", "norm_price_ranges", "norm_volume_ratios"]
-        
-        if not req_data:
-            return jsonify({"error": "No JSON data received"}), 400
-        
-        missing_features = [f for f in features if f not in req_data]
-        if missing_features:
-            return jsonify({"error": f"Missing features: {missing_features}"}), 400
-        
-        mapped = {f: map_input(centroids[f], req_data[f].lower()) for f in features}
-        cluster = best_cluster(mapped)
-        cluster_tickers = cleaned_df[cleaned_df["Cluster"] == cluster]["Ticker"].dropna().tolist()
-        
-        if not cluster_tickers:
-            cluster_tickers = ["AAPL", "MSFT", "GOOGL"]
-        
-        portfolio_weights = np.random.dirichlet(np.ones(len(cluster_tickers)))
-        portfolio = {ticker: round(weight * 100, 2) for ticker, weight in zip(cluster_tickers, portfolio_weights)}
-        
-        return jsonify({
-            "closest_cluster": cluster,
-            "optimized_companies": cluster_tickers,
-            "optimal_portfolio": portfolio,
-            "expected_return": 0.08,
-            "expected_volatility": 0.15,
-        })
+    data = request.json
+    if any(f not in data for f in features):
+        return jsonify({"error": "Missing features"}), 400
+    if any(data[f].lower() not in ["high", "medium", "low"] for f in features):
+        return jsonify({"error": "Values must be high / medium / low"}), 400
     
-    except Exception as e:
-        print("Error in optimize:", str(e))
-        return jsonify({"error": str(e)}), 500
+    mapped = {f: map_input(centroids[f], data[f].lower()) for f in features}
+    cluster = best_cluster(mapped)
+    tickers = cleaned_df[cleaned_df["Cluster"] == cluster]["Ticker"].dropna().tolist()
+    
+    stock_data_clean = stock_data.dropna(axis=1)
+    ticker_cols = [c for c in stock_data_clean.columns if c != "Date"]
+    cluster_tickers = list(set(tickers) & set(ticker_cols))
+    
+    if not cluster_tickers:
+        return jsonify({"error": "No matching tickers in stock data"}), 400
+    
+    stock_cluster = stock_data_clean[["Date"] + cluster_tickers]
+    returns = stock_cluster.drop(columns=["Date"]).pct_change().dropna()
+    mean_ret = returns.mean() * 252
+    cov = returns.cov() * 252
+    
+    sims = 10000
+    weights = np.random.dirichlet(np.ones(len(mean_ret)), sims)
+    res = np.array([stats(w, mean_ret, cov) for w in weights])
+    best = res[:, 2].argmax()
+    
+    return jsonify({
+        "closest_cluster": cluster,
+        "optimized_companies": cluster_tickers,
+        "optimal_portfolio": {t: round(w * 100, 2) for t, w in zip(mean_ret.index, weights[best])},
+        "expected_return": float(res[best, 0]),
+        "expected_volatility": float(res[best, 1]),
+    })
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))

@@ -10,7 +10,7 @@ from sklearn.cluster import SpectralClustering
 from sklearn.preprocessing import StandardScaler
 
 app = Flask(__name__, static_folder="static", static_url_path="")
-CORS(app)
+CORS(app, origins=["https://portfolio-optimization-system-react-zdz8.vercel.app"])
 app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///data.db"
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 db = SQLAlchemy(app)
@@ -22,23 +22,19 @@ class Data(db.Model):
 with app.app_context():
     db.create_all()
 
-# API 데이터 로드
 API_KEY = os.environ.get("API_KEY")
 tickers = "AAPL,MSFT,GOOGL,AMZN,TSLA,META,NVDA,NFLX,JPM,JNJ"
 response = requests.get(f"https://financialmodelingprep.com/api/v3/quote/{tickers}?apikey={API_KEY}")
 data = response.json()
 
-# 정규화를 위한 값들 계산
 price_diffs = [(stock['price'] - stock['priceAvg200']) for stock in data]
 price_ranges = [(stock['yearHigh'] - stock['yearLow']) for stock in data]
 volume_ratios = [(stock['volume'] / stock['avgVolume']) for stock in data]
 
-# 정규화
 scaler = StandardScaler()
 features_to_scale = np.column_stack([price_diffs, price_ranges, volume_ratios])
 scaled_features = scaler.fit_transform(features_to_scale)
 
-# 데이터프레임 생성
 cleaned_df = pd.DataFrame({
     'Ticker': [stock['symbol'] for stock in data],
     'pe': [stock['pe'] for stock in data],
@@ -53,7 +49,6 @@ stock_data = pd.read_csv("stock_data.csv")
 features = ["pe", "eps", "marketCap", "norm_price_diffs", "norm_price_ranges", "norm_volume_ratios"]
 cleaned_df_filtered = cleaned_df[features].dropna()
 
-# Spectral Clustering
 spectral = SpectralClustering(n_clusters=3, affinity='rbf')
 labels = spectral.fit_predict(cleaned_df_filtered)
 cleaned_df.loc[cleaned_df_filtered.index, "Cluster"] = labels.astype(int)

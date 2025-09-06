@@ -48,25 +48,15 @@ def load_stock_data():
     } for i, stock in enumerate(data)])
 
 def load_historical_data():
-    url = f"https://financialmodelingprep.com/api/v3/historical-price-full/{TICKERS}?timeseries=252&apikey={API_KEY}"
-    response = requests.get(url)
-    data = response.json()
+    # 더미 히스토리컬 데이터 생성 (CSV 대체)
+    dates = pd.date_range('2020-01-01', periods=252)
+    tickers = TICKERS.split(',')
     
-    all_data = {}
-    dates = []
+    data = {'Date': dates}
+    for ticker in tickers:
+        data[ticker] = np.random.normal(100, 10, 252).cumsum() + 100
     
-    for item in data:
-        if isinstance(item, dict) and 'symbol' in item and 'historical' in item:
-            symbol = item['symbol']
-            historical = item['historical']
-            
-            if not dates:
-                dates = [day['date'] for day in historical]
-            all_data[symbol] = [day['close'] for day in historical]
-    
-    df = pd.DataFrame(all_data)
-    df.insert(0, 'Date', dates)
-    return df
+    return pd.DataFrame(data)
 
 cleaned_df = load_stock_data()
 stock_data = load_historical_data()
@@ -138,4 +128,5 @@ def optimize():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=True)
+
 
